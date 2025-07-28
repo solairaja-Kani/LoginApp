@@ -1,21 +1,38 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, StyleSheet, Alert } from 'react-native';
+import { View, StyleSheet, Platform } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
 import * as Location from 'expo-location';
+import * as Notifications from 'expo-notifications';
+
+// Set notification handler to show notifications when app is in foreground
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: false,
+    shouldSetBadge: false,
+  }),
+});
 
 export default function GeoPage() {
   const [currentLocation, setCurrentLocation] = useState(null);
   const [targetLocation, setTargetLocation] = useState(null);
-  const alertedRef = useRef(false); // prevent multiple alerts
+  const alertedRef = useRef(false); // prevent multiple notifications
 
   useEffect(() => {
     let subscriber;
 
-    const getLocation = async () => {
+    const getPermissionsAndStartLocation = async () => {
+      // Request location permission
       let { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permission denied');
+        console.log('Location permission denied');
         return;
+      }
+
+      // Request notification permissions (important for iOS)
+      const { status: notifStatus } = await Notifications.requestPermissionsAsync();
+      if (notifStatus !== 'granted') {
+        console.log('Notification permission denied');
       }
 
       subscriber = await Location.watchPositionAsync(
@@ -23,7 +40,7 @@ export default function GeoPage() {
           accuracy: Location.Accuracy.High,
           distanceInterval: 1,
         },
-        (loc) => {
+        async (loc) => {
           setCurrentLocation(loc);
 
           if (targetLocation) {
@@ -37,32 +54,41 @@ export default function GeoPage() {
             console.log(`Distance to target: ${distance} meters`);
 
             if (distance < 100 && !alertedRef.current) {
-              Alert.alert('You are within 100 meters of the target!');
-              alertedRef.current = true; // avoid spamming
+              // Send a notification instead of alert
+              await Notifications.scheduleNotificationAsync({
+                content: {
+                  title: "Nearby Target",
+                  body: "You are within 100 meters of the target!",
+                  sound: true,
+                },
+                trigger: null, // trigger immediately
+              });
+
+              alertedRef.current = true; // avoid spamming notifications
             }
           }
         }
       );
     };
 
-    getLocation();
+    getPermissionsAndStartLocation();
 
     return () => {
       if (subscriber) {
         subscriber.remove();
       }
     };
-  }, [targetLocation]); // re-run when target changes
+  }, [targetLocation]);
 
   const handleMapPress = (event) => {
     const { coordinate } = event.nativeEvent;
     setTargetLocation(coordinate);
-    alertedRef.current = false; // reset alert if new target
+    alertedRef.current = false; // reset alert for new target
   };
 
-  // Helper: Haversine formula
+  // Haversine formula for distance in meters
   const getDistanceFromLatLonInMeters = (lat1, lon1, lat2, lon2) => {
-    const R = 6371e3; // Earth radius in meters
+    const R = 6371e3;
     const φ1 = (lat1 * Math.PI) / 180;
     const φ2 = (lat2 * Math.PI) / 180;
     const Δφ = ((lat2 - lat1) * Math.PI) / 180;
@@ -73,9 +99,7 @@ export default function GeoPage() {
       Math.cos(φ1) * Math.cos(φ2) *
       Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-    const d = R * c; // in meters
-    return d;
+    return R * c;
   };
 
   return (
@@ -97,7 +121,6 @@ export default function GeoPage() {
           }}
           onPress={handleMapPress}
         >
-          {/* Current location marker */}
           <Marker
             coordinate={{
               latitude: currentLocation.coords.latitude,
@@ -106,8 +129,6 @@ export default function GeoPage() {
             title="You are here"
             pinColor="blue"
           />
-
-          {/* Target marker */}
           {targetLocation && (
             <Marker
               coordinate={targetLocation}
@@ -122,10 +143,6 @@ export default function GeoPage() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  map: {
-    ...StyleSheet.absoluteFillObject,
-  },
+  container: { flex: 1 },
+  map: { ...StyleSheet.absoluteFillObject },
 });
